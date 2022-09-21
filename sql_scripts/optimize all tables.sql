@@ -1,0 +1,6 @@
+SET @database = "DATABASE_NAME";
+
+SELECT CONCAT("OPTIMIZE TABLE ", GROUP_CONCAT(CONCAT(@database,".`",`TABLES`.TABLE_NAME,"` ") SEPARATOR ", "),";") AS "Combined Opimize"
+FROM information_schema.`TABLES`
+WHERE `TABLES`.TABLE_SCHEMA=@database
+AND TABLE_TYPE<>'VIEW';
