@@ -15,9 +15,12 @@ optimize = f"""SELECT CONCAT("OPTIMIZE TABLE ", GROUP_CONCAT(CONCAT('{database_t
 # Alter/Change to Aria & char to var
 alter_tables = f"""WITH combo_column AS (
 	SELECT '{database_to_alter}' AS "TABLE_SCHEMA", a.TABLE_NAME AS "mod_table", a.TABLE_TYPE, b.DATA_TYPE,b.COLUMN_NAME,b.COLUMN_TYPE, b.COLUMN_DEFAULT,
+	TRIM(TRAILING "," FROM
 	GROUP_CONCAT(
-	CONCAT(" MODIFY COLUMN `",b.COLUMN_NAME,"` ",'var', b.COLUMN_TYPE, " CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT ", IF(b.COLUMN_DEFAULT IS NULL, "NULL", b.COLUMN_DEFAULT))
-	SEPARATOR ",") AS "column_update"
+	IFNULL(
+	CONCAT("MODIFY COLUMN `",b.COLUMN_NAME,"` ",'var', b.COLUMN_TYPE, " CHARACTER SET latin1 COLLATE latin1_swedish_ci DEFAULT ", IFNULL(b.COLUMN_DEFAULT IS NULL, "NULL")), ""
+	)
+	SEPARATOR ",")) AS "column_update"
 	FROM {database}.`TABLES` a INNER JOIN {database}.`COLUMNS` b
 		ON a.TABLE_NAME = b.TABLE_NAME
 			AND a.TABLE_SCHEMA = b.TABLE_SCHEMA
@@ -36,9 +39,9 @@ alter_tables = f"""WITH combo_column AS (
 
     SELECT
 	CONCAT("ALTER TABLE ",'{database_to_alter}',".`",a.TABLE_NAME,"` ",
-	IFNULL(CONCAT(c.column_update, ", "), ""),
+	IFNULL(c.column_update, ""),
 	IFNULL(d.to_aria_engine, ""),
-	"; OPTIMIZE TABLE ",'{database_to_alter}',".`", a.TABLE_NAME,"`;") AS "Alter_Script"
+	";") AS "Alter_Script"
 
     FROM {database}.`TABLES` a INNER JOIN {database}.`COLUMNS` b
 	ON a.TABLE_NAME = b.TABLE_NAME
@@ -63,19 +66,8 @@ connection = mariadb.connect(
     port=config("port", default=""),
 )
 
-
-def combined_query(
-    query: str, connection: mysql.connector.connection_cext.CMySQLConnection
-) -> list:
-    """_summary_
-
-    Args:
-        query (str): A string in the format for valid SQL querries.
-        connection (mysql.connector.connection_cext.CMySQLConnection): A connection object which we use to access our database
-
-    Returns:
-        list: Returns a list for each of the created scripts.
-    """
+# Function for getting which tables need to be updated
+def combined_query(query: str, connection) -> list:
     try:
         cur = connection.cursor()
         cur.execute(query)
@@ -96,19 +88,7 @@ def combined_query(
 
 
 # Function for running multiple scripts
-def alter(
-    state: str,
-    connection: mysql.connector.connection_cext.CMySQLConnection,
-    msg: str = "Done!",
-) -> None:
-    """With a given connection, run a SQL script on a database and show a message when script has completed.
-
-    Args:
-        state (str): A single SQL script we will run in order to execute a script on our database.
-        connection (mysql.connector.connection_cext.CMySQLConnection): Connection object which establishes the connection to the database.
-        msg (str, optional): Output message string used to convey information. Defaults to "Done!".
-    """
-
+def alter(state: str, connection, msg: str = "Done!"):
     try:
         cur = connection.cursor()
         result = cur.execute(state, multi=True)
@@ -124,16 +104,18 @@ def alter(
         print("Database connection has been closed")
 
 
-# Running our scripts
 try:
     alter_table = combined_query(alter_tables, connection)
+    print("Beginning Alter script...")
     for row in alter_table:
-        alter(row[0])
+        alter(row[0], connection)
+
+    print("Beginning Optimize script...")
     optimize_table = combined_query(optimize, connection)
-    for row in optimize_table:
-        alter(row[0])
+    alter(optimize_table[0], connection)
     connection.commit()
 
 except Exception as e:
     connection.rollback()
+    connection.close()
     raise e
